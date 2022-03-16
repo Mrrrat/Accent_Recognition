@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torchaudio
 from torch.nn.modules.loss import _WeightedLoss
-import torch.nn.functional as F
+from torch.nn.functional import log_softmax
 
 
 class SmoothCrossEntropyLoss(_WeightedLoss):
@@ -27,7 +27,7 @@ class SmoothCrossEntropyLoss(_WeightedLoss):
 
     def forward(self, inputs, targets):
         targets = SmoothCrossEntropyLoss._smooth_one_hot(targets, inputs.size(-1), self.smoothing)
-        lsm = F.log_softmax(inputs, -1)
+        lsm = log_softmax(inputs, -1)
 
         if self.weight is not None:
             lsm = lsm * self.weight.unsqueeze(0)

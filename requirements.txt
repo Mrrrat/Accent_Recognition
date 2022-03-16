@@ -5,7 +5,10 @@ tqdm
 tensorboard
 matplotlib
 scikit-learn
+librosa
 
+matplotlib
+seaborn
 pandas
 torchaudio===0.10.1+cu113
 torch_audiomentations

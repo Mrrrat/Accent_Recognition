@@ -91,8 +91,7 @@ class Fade(object):
 
 
 class SameSize(nn.Module):
-
-    def __init__(self, L = 16000):
+    def __init__(self, L=16000):
         super().__init__()
         self.L = L
 

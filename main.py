@@ -1,16 +1,34 @@
-# This is a sample Python script.
+import wandb
+import torch
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+from utils import seed_torch, count_parameters
+from model import make_config, ClassificationNet, BatchOverfitModel
+from dataloader import get_data_loaders
+from train_eval import train
+from augmentations import ComposeAugs, Volume, Fade, PitchShift, Noise
 
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
+LABELS_PATH = 'D:/Downloads/archive/meta5.csv'
+DATA_PATH = 'D:/Downloads/archive/recordings/recordings/'
 
 
-# Press the green button in the gutter to run the script.
+def main():
+	SEED = 67
+	config = make_config()
+	seed_torch(SEED)
+
+	transform = ComposeAugs([Volume(p=0.25), Fade(p=0.25), PitchShift(p=0.25), Noise(p=0.2)], stretch_p=0.25)
+
+	train_loader, val_loader = get_data_loaders(DATA_PATH, LABELS_PATH, transform=transform, bs=2)
+
+	wandb.init(project='Course Work', name='first try', config=config)
+
+	#model = ClassificationNet(config).to(config['device'])
+	model = BatchOverfitModel(config).to(config['device'])
+	print(f'total params: {count_parameters(model)}')
+	optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
+	#train(config, model, optimizer, train_loader, val_loader)
+
+
 if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+	main()
