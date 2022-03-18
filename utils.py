@@ -16,9 +16,10 @@ class SmoothCrossEntropyLoss(_WeightedLoss):
         self.reduction = reduction
 
     @staticmethod
-    def _smooth_one_hot(targets: torch.Tensor, n_classes: int, smoothing=0.0):
+    def _smooth_one_hot(targets: torch.Tensor, n_classes, smoothing=0.0):
         assert 0 <= smoothing < 1
         with torch.no_grad():
+            targets = targets.to(torch.int64)
             targets = torch.empty(size=(targets.size(0), n_classes),
                                   device=targets.device) \
                 .fill_(smoothing / (n_classes-1)) \

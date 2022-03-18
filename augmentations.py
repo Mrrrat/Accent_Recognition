@@ -34,7 +34,7 @@ class Stretch(object):
 
     def __call__(self, sample):
         if np.random.rand() >= 1-self.p:
-            wav = librosa.effects.time_stretch(sample.numpy(), np.random.uniform(self.low, self.high))
+            wav = librosa.effects.time_stretch(sample.numpy(), rate=np.random.uniform(self.low, self.high))
             wav = torch.from_numpy(wav)
         else:
             wav = sample
@@ -50,7 +50,7 @@ class PitchShift(object):
 
     def __call__(self, sample):
         if np.random.rand() >= 1-self.p:
-            wav = librosa.effects.pitch_shift(sample.numpy(), self.sr, np.random.uniform(self.low, self.high))
+            wav = librosa.effects.pitch_shift(sample.numpy(), sr=self.sr, n_steps=np.random.uniform(self.low, self.high))
             wav = torch.from_numpy(wav)
         else:
             wav = sample

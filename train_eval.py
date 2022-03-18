@@ -25,6 +25,7 @@ def train_epoch(model, optimizer, train_loader, to_mels, criterion, device):
     model.train()
     tr_loss, tr_steps = 0, 0
 
+    preds, labels = torch.tensor([]).to(device), torch.tensor([]).to(device)
     for batch in tqdm(train_loader):
         wav, target = batch[0].to(device), batch[1].to(device)
         mels = to_mels(wav)
@@ -32,16 +33,21 @@ def train_epoch(model, optimizer, train_loader, to_mels, criterion, device):
         optimizer.zero_grad()
         #prediction, attention_vec = model(mels)
         prediction = model(mels)
+        #print(prediction)
         loss = criterion(prediction, target)
         loss.backward()
 
         tr_loss += loss.item()
+
+        preds = torch.cat([preds, torch.argmax(prediction, -1)])
+        labels = torch.cat([labels, target])
         tr_steps += 1
 
         #torch.nn.utils.clip_grad_norm_(model.parameters(), 15, error_if_nonfinite=True)
         optimizer.step()
 
-    wandb.log({'train loss': tr_loss / tr_steps})
+
+    wandb.log({'train loss': tr_loss / tr_steps, 'train accuracy': accuracy_score(labels.cpu(), preds.cpu())})
 
 
 @torch.no_grad()

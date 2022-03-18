@@ -19,15 +19,15 @@ def main():
 
 	transform = ComposeAugs([Volume(p=0.25), Fade(p=0.25), PitchShift(p=0.25), Noise(p=0.2)], stretch_p=0.25)
 
-	train_loader, val_loader = get_data_loaders(DATA_PATH, LABELS_PATH, transform=transform, bs=2)
+	train_loader, val_loader = get_data_loaders(DATA_PATH, LABELS_PATH, transform=transform, bs=64)
 
 	wandb.init(project='Course Work', name='first try', config=config)
 
 	#model = ClassificationNet(config).to(config['device'])
-	model = BatchOverfitModel(config).to(config['device'])
+	model = BatchOverfitModel(n_feats=config['n_feats'], n_class=config['n_class'], num_layers=config['num_layers'], ).to(config['device'])
 	print(f'total params: {count_parameters(model)}')
 	optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
-	#train(config, model, optimizer, train_loader, val_loader)
+	train(config, model, optimizer, train_loader, val_loader)
 
 
 if __name__ == '__main__':

@@ -125,24 +125,33 @@ def make_param_dict(names, params):
 def make_config():
     n_mels = 80
     n_classes = 35
+    # config = {
+    #     #  k, in, out, dilation
+    #     'c1': [33, n_mels, 256, 1],
+    #     'c2': [87, 512, 512, 2],
+    #     'c3': [1, 512, 1024, 1],
+    #     # n_blocks, k, in, out
+    #     'b1': [5, 33, 256, 256],
+    #     'b2': [5, 39, 256, 256],
+    #     'b3': [5, 51, 256, 512],
+    #     'b4': [5, 63, 512, 512],
+    #     'b5': [5, 75, 512, 512],
+    #     'hidden_size': 1024,
+    #     'attn_size': 512,
+    #     'n_classes' : n_classes,
+    #     'n_epochs': 25,
+    #     'n_mels': n_mels,
+    #     'device': torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    #
+    # }
     config = {
-        #  k, in, out, dilation
-        'c1': [33, n_mels, 256, 1],
-        'c2': [87, 512, 512, 2],
-        'c3': [1, 512, 1024, 1],
-        # n_blocks, k, in, out
-        'b1': [5, 33, 256, 256],
-        'b2': [5, 39, 256, 256],
-        'b3': [5, 51, 256, 512],
-        'b4': [5, 63, 512, 512],
-        'b5': [5, 75, 512, 512],
-        'hidden_size': 1024,
-        'attn_size': 512,
-        'n_classes' : n_classes,
-        'n_epochs': 25,
-        'n_mels': n_mels,
+        "n_feats": 80,
+        "fc_hidden": 512,
+        "num_layers": 2,
+        'n_class': 5,
+        'n_epochs': 50,
+        'n_mels': 80,
         'device': torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
     }
 
     return config
@@ -172,13 +181,15 @@ class ClassificationNet(nn.Module):
 
 
 class BatchOverfitModel(nn.Module):
-    def __init__(self, n_feats, n_class, fc_hidden=512, num_layers=2,*args, **kwargs):
-        super().__init__(n_feats, n_class, *args, **kwargs)
+    def __init__(self, n_feats, n_class, fc_hidden=512, num_layers=2, *args, **kwargs):
+        super().__init__()
         #self.gru = nn.GRU(n_feats, fc_hidden, num_layers=num_layers,  bidirectional=True)
         self.lstm = nn.LSTM(n_feats, hidden_size=fc_hidden, num_layers=num_layers, batch_first=True, bidirectional=True)
-        self.fc = nn.Linear(fc_hidden * 2, n_class)
+        self.fc = nn.Linear(fc_hidden * 2 * num_layers, n_class)
 
-    def forward(self, spectrogram, *args, **kwargs):
-        x, _ = self.lstm(spectrogram.transpose(1, 2))
+    def forward(self, x):
+        _, (x, _) = self.lstm(x.transpose(1, 2))
+        x = x.permute(1, 0, 2)
+        x = torch.reshape(x, (x.size(0), -1))
         x = self.fc(x)
-        return {"logits": x}
+        return x
