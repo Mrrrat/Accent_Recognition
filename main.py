@@ -8,27 +8,39 @@ from train_eval import train
 from augmentations import ComposeAugs, Volume, Fade, PitchShift, Noise
 
 
-LABELS_PATH = 'D:/Downloads/archive/meta5.csv'
-DATA_PATH = 'D:/Downloads/archive/recordings/recordings/'
+LABELS_PATH = 'meta.csv'
+DATA_PATH = 'audios'
 
 
-def main():
-	SEED = 67
-	config = make_config()
-	seed_torch(SEED)
+def main(config):
+    if not os.path.exists('checkpoints'):
+        os.mkdir('checkpoints')
+    seed_torch(80085)
 
-	transform = ComposeAugs([Volume(p=0.25), Fade(p=0.25), PitchShift(p=0.25), Noise(p=0.2)], stretch_p=0.25)
+    transform = ComposeAugs([Volume(p=0.25), Fade(p=0.25), PitchShift(p=0.25), Noise(p=0.2)], stretch_p=0.25)
+    
+    train_loader, val_loader, test_loader = get_data_loaders(DATA_PATH, LABELS_PATH, batch_size=config['batch_size'])
 
-	train_loader, val_loader = get_data_loaders(DATA_PATH, LABELS_PATH, transform=transform, bs=64)
-
-	wandb.init(project='Course Work', name='first try', config=config)
-
-	#model = ClassificationNet(config).to(config['device'])
-	model = BatchOverfitModel(n_feats=config['n_feats'], n_class=config['n_class'], num_layers=config['num_layers'], ).to(config['device'])
-	print(f'total params: {count_parameters(model)}')
-	optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
-	train(config, model, optimizer, train_loader, val_loader)
+    model = ClassificationNet(config).to(config['device'])
+    #model = BatchOverfitModel(n_feats=config['n_feats'], n_class=config['n_class'], num_layers=config['num_layers'], ).to(config['device'])
+    
+    print(f'total params: {count_parameters(model)}')
+    
+    if config['opt'] == 'AdamW':
+        optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=2e-4)
+    wandb.init(project='Thesis', name=config['run_name'], config=config)
+    train(config, model, optimizer, train_loader, val_loader)
 
 
 if __name__ == '__main__':
-	main()
+    config = {
+    'num_classes': 10, 
+    'n_epochs': 20,
+    'run_name': 'Supervised baseline Mel',
+    'mode': 'mel',
+    'device': torch.device('cuda:0' if torch.cuda.is_available() else 'cpu'),
+    'batch_size': 64,
+    'opt': 'AdamW',
+    'num_workers': 8
+    } 
+    main(config)

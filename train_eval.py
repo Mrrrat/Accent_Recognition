@@ -1,82 +1,171 @@
 import wandb
 import torch
-import seaborn as sns
-import matplotlib.pyplot as plt
-from utils import SmoothCrossEntropyLoss, LogMelSpectrogram, upscale_to_wav_len
-from sklearn.metrics import accuracy_score
+import torchmetrics
+from utils import SmoothCrossEntropyLoss
 from tqdm import tqdm
 
 
-def train(config, model, optimizer, train_loader, val_loader=None):
-    device = config['device']
-    epochs = config['n_epochs']
-    criterion = SmoothCrossEntropyLoss(smoothing=0.1).to(device)
-    featurizer = LogMelSpectrogram(n_mels=config['n_mels']).to(device)
-    for epoch in range(epochs):
-        train_epoch(model, optimizer, train_loader, featurizer, criterion, device)
-        val_epoch(model, val_loader, featurizer, criterion, device, epoch)
+def save(config, model, optimizer, scheduler=None, suffix='last'):
+    if scheduler is not None:
         torch.save({
             'model_state_dict': model.state_dict(),
-            'opt_state_dict': optimizer.state_dict(),
-            }, 'latest_checkpoint.pt')
+            #'opt_state_dict': optimizer.state_dict(),
+            #'scheduler_state_dict': scheduler.state_dict()
+            }, 'checkpoints/' + config['run_name'] + '_' + suffix + '.pt')
+    else:
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            #'opt_state_dict': optimizer.state_dict(),
+            }, 'checkpoints/' + config['run_name'] + '_' + suffix + '.pt')
 
-
-def train_epoch(model, optimizer, train_loader, to_mels, criterion, device):
+def train(config, model, optimizer, train_loader, val_loader=None, scheduler=None):
+    device = config['device']
+    epochs = config['n_epochs'] 
+    
+    #criterion = nn.CrossEntropyLoss().to(device)
+    criterion = SmoothCrossEntropyLoss(smoothing=0.1).to(device)
+        
+    best_loss = 1e10
+    for epoch in tqdm(range(epochs)):
+        train_epoch(model, optimizer, scheduler, train_loader, criterion, device, config['num_classes'], commit=val_loader is None)
+        if val_loader:
+            cur_loss, cur_acc = val_epoch(model, val_loader, criterion, device, config['num_classes'])
+            best_loss = min(best_loss, cur_loss)
+            if best_loss == cur_loss:
+                save(config, model, optimizer, scheduler, 'best')
+                #print(f'Epoch: {epoch} | Val Loss: {cur} | Saved')
+        else:
+            save(config, model, optimizer, scheduler, 'last')
+            
+            
+def train_epoch(model, 
+                optimizer, 
+                scheduler, 
+                loader, 
+                criterion, 
+                device, 
+                num_classes, 
+                commit=False, 
+                use_mp=True, 
+                accum_steps=1):
     model.train()
-    tr_loss, tr_steps = 0, 0
+    total_loss, total_steps = 0, 0
 
-    preds, labels = torch.tensor([]).to(device), torch.tensor([]).to(device)
-    for batch in tqdm(train_loader):
-        wav, target = batch[0].to(device), batch[1].to(device)
-        mels = to_mels(wav)
+    preds, targets = torch.tensor([]).to(device), torch.tensor([]).to(device)
+    
+    scaler = torch.cuda.amp.GradScaler() if use_mp else None
+    
+    for step, batch in enumerate(tqdm(loader)):
+        data, target = batch[0].to(device), batch[1].to(device)
+        
+        if use_mp:
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                pred = model(data)
+                loss = criterion(pred, target)
+            total_loss += loss.item() * target.size(0)
+            
+            scaler.scale(loss).backward()
+            grad_norm = get_grad_norm(model)
+            if step % accum_steps == accum_steps - 1:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+        else:
+            pred = model(data)
+            loss = criterion(pred, target)
+            total_loss += loss.item() * target.size(0)
+            loss.backward()
+            grad_norm = get_grad_norm(model)
+            if step % accum_steps == accum_steps - 1:
+                optimizer.step()
+                optimizer.zero_grad()
+        
+        preds = torch.cat([preds, pred])
+        targets = torch.cat([targets, target])
+        total_steps += target.size(0)
 
-        optimizer.zero_grad()
-        #prediction, attention_vec = model(mels)
-        prediction = model(mels)
-        #print(prediction)
-        loss = criterion(prediction, target)
-        loss.backward()
-
-        tr_loss += loss.item()
-
-        preds = torch.cat([preds, torch.argmax(prediction, -1)])
-        labels = torch.cat([labels, target])
-        tr_steps += 1
-
-        #torch.nn.utils.clip_grad_norm_(model.parameters(), 15, error_if_nonfinite=True)
-        optimizer.step()
-
-
-    wandb.log({'train loss': tr_loss / tr_steps, 'train accuracy': accuracy_score(labels.cpu(), preds.cpu())})
+    targets = targets.type(torch.cuda.IntTensor)
+    acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes).to(device)   
+    
+    if scheduler is not None:
+        wandb.log({'Train_Accuracy': acc(preds, targets),
+                   'Train_Loss': total_loss/total_steps,
+                   'Learning_Rate': scheduler.get_last_lr()[0],
+                   'Grad_Norm': grad_norm}, commit=commit)
+        scheduler.step()
+    else:
+        wandb.log({'Train_Accuracy': acc(preds, targets),
+                   'Train_Loss': total_loss/total_steps,
+                   'Grad_Norm': grad_norm}, commit=commit)
 
 
 @torch.no_grad()
-def val_epoch(model, val_loader, to_mels, criterion, device, epoch):
+def val_epoch(model, 
+              loader, 
+              criterion, 
+              device, 
+              num_classes, 
+              use_mp=True, 
+              accum_steps=1):
     model.eval()
-    val_loss = 0
+    total_loss, total_steps = 0, 0
 
-    preds, labels = torch.tensor([]).to(device), torch.tensor([]).to(device)
-    for batch in tqdm(val_loader):    # val_loader
-        wav, target = batch[0].to(device), batch[1].to(device)
-        #wav_len = wav.shape[1]
-        mels = to_mels(wav)
+    preds, targets = torch.tensor([]).to(device), torch.tensor([]).to(device)
+    
+    scaler = torch.cuda.amp.GradScaler() if use_mp else None
+    
+    for batch in tqdm(loader):
+        data, target = batch[0].to(device), batch[1].to(device)
+        
+        if use_mp:
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                pred = model(data)
+                loss = criterion(pred, target)
+            total_loss += loss.item() * target.size(0)
+        else:
+            pred = model(data)
+            loss = criterion(pred, target)
+            total_loss += loss.item() * target.size(0)
+        
+        preds = torch.cat([preds, pred])
+        targets = torch.cat([targets, target])
+        total_steps += target.size(0)
 
-        #prediction, attention_vec = model(mels)
-        prediction = model(mels)
+    targets = targets.type(torch.cuda.IntTensor)
+    acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes).to(device)   
+    
+    wandb.log({'Val_Accuracy': acc(preds, targets),
+               'Val_Loss': total_loss/total_steps
+              })
+    
+    return total_loss/total_steps, acc
 
-        loss = criterion(prediction, target)
 
-        val_loss += loss.item()
-        preds = torch.cat([preds, torch.argmax(prediction, -1)])
-        labels = torch.cat([labels, target])
+@torch.no_grad()
+def test_epoch(model,
+              loader,
+              device,
+              num_classes,
+              use_mp=True):
+    model.eval()
 
-    # fig, axes = plt.subplots(2, 1, figsize=(22, 10))
-    # probs = upscale_to_wav_len(attention_vec)[:wav_len]
-    # mask = probs > probs.quantile(0.75)
-    # sns.lineplot(x=np.arange(wav_len), y=wav.cpu().numpy().squeeze(), hue=mask.detach().cpu().numpy().squeeze())#, ax=axes[0])
-    # axes[1].plot(probs.detach().cpu().numpy().squeeze())
-    # plt.title(str(target.squeeze()))
-    # plt.savefig(f'val_{epoch}.png')
-    wandb.log({'mean val loss': val_loss / len(val_loader),
-                'val accuracy': accuracy_score(labels.cpu(), preds.cpu())})
-              #'val audio for attention': [wandb.Audio(wav.cpu().numpy().squeeze(), sample_rate=16000)]})
+    preds, targets = torch.tensor([]).to(device), torch.tensor([]).to(device)
+    
+    scaler = torch.cuda.amp.GradScaler() if use_mp else None
+    
+    for batch in tqdm(loader):
+        data, target = batch[0].to(device), batch[1].to(device)
+        
+        if use_mp:
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                pred = model(data)
+        else:
+            pred = model(data)
+        
+        preds = torch.cat([preds, pred])
+        targets = torch.cat([targets, target])
+
+    targets = targets.type(torch.cuda.IntTensor)
+    acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes).to(device)   
+    
+    return acc(preds, targets)
