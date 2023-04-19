@@ -1,8 +1,20 @@
 import wandb
 import torch
+from torch import nn
 import torchmetrics
 from utils import SmoothCrossEntropyLoss
 from tqdm import tqdm
+
+
+def get_grad_norm(model):
+    total_norm = 0
+    for p in model.parameters():
+        if p.grad is None or not p.requires_grad:
+            continue
+        param_norm = p.grad.detach().data.norm(2)
+        total_norm += param_norm.item() ** 2
+    total_norm = total_norm ** 0.5
+    return total_norm
 
 
 def save(config, model, optimizer, scheduler=None, suffix='last'):
@@ -18,12 +30,13 @@ def save(config, model, optimizer, scheduler=None, suffix='last'):
             #'opt_state_dict': optimizer.state_dict(),
             }, 'checkpoints/' + config['run_name'] + '_' + suffix + '.pt')
 
+
 def train(config, model, optimizer, train_loader, val_loader=None, scheduler=None):
     device = config['device']
     epochs = config['n_epochs'] 
     
     #criterion = nn.CrossEntropyLoss().to(device)
-    criterion = SmoothCrossEntropyLoss(smoothing=0.1).to(device)
+    criterion = SmoothCrossEntropyLoss(smoothing=config['smoothing']).to(device)
         
     best_loss = 1e10
     for epoch in tqdm(range(epochs)):
@@ -36,8 +49,8 @@ def train(config, model, optimizer, train_loader, val_loader=None, scheduler=Non
                 #print(f'Epoch: {epoch} | Val Loss: {cur} | Saved')
         else:
             save(config, model, optimizer, scheduler, 'last')
-            
-            
+      
+        
 def train_epoch(model, 
                 optimizer, 
                 scheduler, 

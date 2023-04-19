@@ -7,7 +7,7 @@ import torchaudio
 import torchaudio.transforms as T
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from sklearn.model_selection import train_test_split
-from Accent_Recognition.utils import LogMelSpectrogram
+from utils import LogMelSpectrogram
 
 
 class AccentDataset(Dataset):
