@@ -11,8 +11,6 @@ matplotlib
 seaborn
 
 librosa
-torch_audiomentations
-editdistance
 wandb
 
 --find-links https://download.pytorch.org/whl/cu117/torch_stable.html
