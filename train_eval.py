@@ -4,6 +4,7 @@ from torch import nn
 import torchmetrics
 from utils import SmoothCrossEntropyLoss
 from tqdm import tqdm
+from pytorch_metric_learning import distances, losses, miners, reducers, testers
 
 
 def get_grad_norm(model):
@@ -36,13 +37,17 @@ def train(config, model, optimizer, train_loader, val_loader=None, scheduler=Non
     epochs = config['n_epochs'] 
     
     #criterion = nn.CrossEntropyLoss().to(device)
-    criterion = SmoothCrossEntropyLoss(smoothing=config['smoothing']).to(device)
+    criterion1 = SmoothCrossEntropyLoss(smoothing=config['smoothing']).to(device)
+    
+    distance = distances.CosineSimilarity()
+    reducer = reducers.ThresholdReducer(low=0)
+    criterion2 = losses.ContrastiveLoss(pos_margin=1, neg_margin=0, distance=distance, reducer=reducer)
         
     best_loss = 1e10
     for epoch in tqdm(range(epochs)):
-        train_epoch(model, optimizer, scheduler, train_loader, criterion, device, config['num_classes'], commit=val_loader is None)
+        train_epoch(model, optimizer, scheduler, train_loader, (criterion1, criterion2), device, config['num_classes'], commit=val_loader is None)
         if val_loader:
-            cur_loss, cur_acc = val_epoch(model, val_loader, criterion, device, config['num_classes'])
+            cur_loss, cur_acc = val_epoch(model, val_loader, criterion1, device, config['num_classes'])
             best_loss = min(best_loss, cur_loss)
             if best_loss == cur_loss:
                 save(config, model, optimizer, scheduler, 'best')
@@ -73,8 +78,9 @@ def train_epoch(model,
         
         if use_mp:
             with torch.autocast(device_type='cuda', dtype=torch.float16):
-                pred = model(data)
-                loss = criterion(pred, target)
+                emb, pred = model(data)
+                loss = criterion[0](pred, target)
+                loss += criterion[1](emb, target)
             total_loss += loss.item() * target.size(0)
             
             scaler.scale(loss).backward()
@@ -84,8 +90,9 @@ def train_epoch(model,
                 scaler.update()
                 optimizer.zero_grad()
         else:
-            pred = model(data)
-            loss = criterion(pred, target)
+            emb, pred  = model(data)
+            loss = criterion[0](pred, target)
+            loss += criterion[1](emb, target)
             total_loss += loss.item() * target.size(0)
             loss.backward()
             grad_norm = get_grad_norm(model)
@@ -98,7 +105,7 @@ def train_epoch(model,
         total_steps += target.size(0)
 
     targets = targets.type(torch.cuda.IntTensor)
-    acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes).to(device)   
+    acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes).to(device)
     
     if scheduler is not None:
         wandb.log({'Train_Accuracy': acc(preds, targets),
@@ -132,11 +139,11 @@ def val_epoch(model,
         
         if use_mp:
             with torch.autocast(device_type='cuda', dtype=torch.float16):
-                pred = model(data)
+                _, pred = model(data)
                 loss = criterion(pred, target)
             total_loss += loss.item() * target.size(0)
         else:
-            pred = model(data)
+            _, pred = model(data)
             loss = criterion(pred, target)
             total_loss += loss.item() * target.size(0)
         
@@ -145,9 +152,11 @@ def val_epoch(model,
         total_steps += target.size(0)
 
     targets = targets.type(torch.cuda.IntTensor)
-    acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes).to(device)   
+    acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes).to(device)
+    auc = torchmetrics.AUROC(task="multiclass", num_classes=num_classes).to(device)
     
     wandb.log({'Val_Accuracy': acc(preds, targets),
+               'Val_AUROC': auc(preds, targets),
                'Val_Loss': total_loss/total_steps
               })
     
@@ -171,14 +180,17 @@ def test_epoch(model,
         
         if use_mp:
             with torch.autocast(device_type='cuda', dtype=torch.float16):
-                pred = model(data)
+                _, pred = model(data)
         else:
-            pred = model(data)
+            _, pred = model(data)
         
         preds = torch.cat([preds, pred])
         targets = torch.cat([targets, target])
 
     targets = targets.type(torch.cuda.IntTensor)
-    acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes).to(device)   
+    acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes).to(device)
+    auc = torchmetrics.AUROC(task="multiclass", num_classes=num_classes).to(device)
     
-    return acc(preds, targets)
+    wandb.log({'Test_Accuracy': acc(preds, targets),
+              'Test_AUROC': auc(preds, targets)
+              })
