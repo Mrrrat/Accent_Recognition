@@ -31,8 +31,11 @@ def main(config):
 
 #     model = StupidModel(config['num_classes']).to(config['device'])
     model = ECAPA_TDNN(512, config['num_classes']).to(config['device'])
+    #model = torch.compile(model)
     
-    print(f'total params: {count_parameters(model)}')
+    params = count_parameters(model)
+    print(f'Total params: {params}')
+    config['#params'] = params
     
     if config['opt'] == 'AdamW':
         optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=2e-4)
@@ -46,7 +49,7 @@ def main(config):
 if __name__ == '__main__':
     config = {
     'num_classes': 9, 
-    'n_epochs': 100,
+    'n_epochs': 150,
     'run_name': 'ecapa-tdnn',
     'device': torch.device('cuda:0' if torch.cuda.is_available() else 'cpu'),
     'batch_size': 16,
