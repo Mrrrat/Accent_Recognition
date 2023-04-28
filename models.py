@@ -208,6 +208,152 @@ class ECAPA_TDNN(nn.Module):
         x = self.bn5(x)
         x = self.fc6(x)
         x = self.bn6(x)
+        x = self.relu(x)
         y = self.fc7(x)
 
         return x, y
+    
+    
+# class ECAPA_TDNN_Attention(nn.Module):
+#     def __init__(self, C, num_classes=9):
+#         super(ECAPA_TDNN, self).__init__()
+
+#         self.torchfbank = torch.nn.Sequential(
+#             PreEmphasis(),            
+#             torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_fft=512, win_length=400, hop_length=160, \
+#                                                  f_min = 20, f_max = 7600, window_fn=torch.hamming_window, n_mels=80),
+#             )
+
+#         self.specaug = FbankAug() # Spec augmentation
+
+#         self.conv1  = nn.Conv1d(80, C, kernel_size=5, stride=1, padding=2)
+#         self.relu   = nn.ReLU()
+#         self.bn1    = nn.BatchNorm1d(C)
+#         self.layer1 = Bottle2neck(C, C, kernel_size=3, dilation=2, scale=8)
+#         self.layer2 = Bottle2neck(C, C, kernel_size=3, dilation=3, scale=8)
+#         self.layer3 = Bottle2neck(C, C, kernel_size=3, dilation=4, scale=8)
+#         # I fixed the shape of the output from MFA layer, that is close to the setting from ECAPA paper.
+#         self.layer4 = nn.Conv1d(3*C, 1536, kernel_size=1)
+# #         self.attention = nn.Sequential(
+# #             nn.Conv1d(4608, 256, kernel_size=1),
+# #             nn.ReLU(),
+# #             nn.BatchNorm1d(256),
+# #             nn.Tanh(), # I add this layer
+# #             nn.Conv1d(256, 1536, kernel_size=1),
+# #             nn.Softmax(dim=2),
+# #             )
+# #         self.bn5 = nn.BatchNorm1d(3072)
+# #         self.fc6 = nn.Linear(3072, 192)
+# #         self.bn6 = nn.BatchNorm1d(192)
+#         self.bn5 = nn.BatchNorm(1536)
+#         self.fc6 = nn.Linear(1536, 192)
+#         self.bn7 = nn.BatchNorm(192)
+#         self.cls = torch.nn.Parameter(torch.rand(192))
+#         self.mha8 = nn.MultiheadAttention(embed_dim=192, num_heads=2, dropout=0.2, batch_first=True)
+        
+#         self.fc9 = nn.Linear(192, num_classes)
+
+
+#     def forward(self, x, aug=True):
+#         with torch.no_grad():
+#             x = self.torchfbank(x)+1e-6
+#             x = x.log()   
+#             x = x - torch.mean(x, dim=-1, keepdim=True)
+#             if aug == True:
+#                 x = self.specaug(x)
+
+#         x = self.conv1(x)
+#         x = self.relu(x)
+#         x = self.bn1(x)
+
+#         x1 = self.layer1(x)
+#         x2 = self.layer2(x+x1)
+#         x3 = self.layer3(x+x1+x2)
+
+#         x = self.layer4(torch.cat((x1,x2,x3),dim=1))
+#         x = self.relu(x)
+
+# #         t = x.size()[-1]
+
+# #         global_x = torch.cat((x,torch.mean(x,dim=2,keepdim=True).repeat(1,1,t), torch.sqrt(torch.var(x,dim=2,keepdim=True).clamp(min=1e-4)).repeat(1,1,t)), dim=1)
+        
+# #         w = self.attention(global_x)
+
+# #         mu = torch.sum(x * w, dim=2)
+# #         sg = torch.sqrt( ( torch.sum((x**2) * w, dim=2) - mu**2 ).clamp(min=1e-4) )
+
+# #         x = torch.cat((mu,sg),1)
+# #         x = self.bn5(x)
+# #         x = self.fc6(x)
+# #         x = self.bn6(x)
+# #         y = self.fc7(x)
+        
+#         x = torch.transpose(x, 1, 2)
+#         x = self.fc6(x)
+#         x = torch.cat((cls, x), dim=0)
+#         x = self.mha8(x,x,x)
+#         y = x[:, 0]
+        
+#         return x, y
+    
+    
+MAX_LENGTH = 5000
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        """
+        Args:
+            x: Tensor, shape [batch_size, seq_len, embedding_dim]
+        """
+        x = x + self.pe[:, :x.size(1)]
+        return self.dropout(x)
+    
+    
+class AccentTransformer(nn.Module):
+    def __init__(self, num_classes, emb_size, hidden_size, n_layers=1, n_head=4, dropout=0.1):
+        super().__init__()
+
+        self.positional = PositionalEncoding(d_model=emb_size, dropout=dropout, max_len=MAX_LENGTH)
+        self.cls = torch.nn.Parameter(torch.rand(1, emb_size))
+        
+        self.projector = nn.Sequential(
+            nn.Linear(emb_size, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, emb_size),
+            nn.LayerNorm(emb_size),
+            nn.ReLU()
+        )
+
+        encoder_layer = nn.TransformerEncoderLayer(emb_size, dim_feedforward=hidden_size, nhead=n_head, dropout=dropout, batch_first=True)
+        self.encoder = nn.TransformerEncoder(encoder_layer=encoder_layer, num_layers=n_layers)
+
+        self.decoder = nn.Sequential(
+            nn.Linear(emb_size, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, num_classes)
+        )
+            
+        self.register_buffer("position_ids", torch.arange(MAX_LENGTH).unsqueeze(1))
+        
+        
+    def forward(self, input):
+        output = input.squeeze(1).transpose(1,2)
+        output = self.projector(output)
+        output = torch.cat((self.cls.repeat(output.size(0), 1, 1), output), dim=1)
+        output = self.positional(output)
+        emb = self.encoder(src=output)[:, 0]
+        output = self.decoder(emb)
+        return emb, output

@@ -11,7 +11,7 @@ from utils import LogMelSpectrogram
 
 
 class AccentDataset(Dataset):
-    def __init__(self, audio_dir, meta, idx=None, transform=None, freq=16000, mode='mel'):
+    def __init__(self, audio_dir, meta, idx=None, transform=None, freq=16000, mode='mel', n_mels=80):
         super().__init__()
         if idx is None:
             idx = np.arange(len(meta.index), dtype=int)
@@ -19,6 +19,7 @@ class AccentDataset(Dataset):
         self.targets = pd.read_csv(meta).loc[idx, 'target'].values
         self.audio_dir = audio_dir
         self.transform = transform
+        self.n_mels = n_mels
         self.freq = freq
         self.mode = mode
 
@@ -30,7 +31,7 @@ class AccentDataset(Dataset):
         if self.mode=='wav':
             return waveform.squeeze(dim=0), self.targets[idx]
         elif self.mode=='mel':
-            spectrogram = LogMelSpectrogram(self.freq, n_mels=80)
+            spectrogram = LogMelSpectrogram(self.freq, n_mels=self.n_mels)
             spectrogram = spectrogram(waveform)
             if self.transform is not None:
                 spectrogram = self.transform(spectrogram)
@@ -74,9 +75,10 @@ def get_data_loaders(data_dir, meta_path, transform=None, batch_size=64, num_wor
     val_idx, test_idx, _, _ = train_test_split(val_idx, meta['target'][val_idx], test_size=0.5,
                                                 stratify=meta['target'][val_idx])
     
-    train_dataset = AccentDataset(data_dir, meta_path, train_idx, transform=transform, mode=mode)
-    val_dataset = AccentDataset(data_dir, meta_path, val_idx, transform=transform, mode=mode)
-    test_dataset = AccentDataset(data_dir, meta_path, test_idx, transform=transform, mode=mode)
+    n_mels = 128
+    train_dataset = AccentDataset(data_dir, meta_path, train_idx, transform=transform, mode=mode, n_mels=n_mels)
+    val_dataset = AccentDataset(data_dir, meta_path, val_idx, transform=transform, mode=mode, n_mels=n_mels)
+    test_dataset = AccentDataset(data_dir, meta_path, test_idx, transform=transform, mode=mode, n_mels=n_mels)
 
     weights = 1.0 / meta.loc[train_idx, 'count'].values
     sampler = WeightedRandomSampler(weights, num_samples=len(weights))
