@@ -51,7 +51,7 @@ class LogMelSpectrogram(nn.Module):
     def __init__(self, sample_rate=16000, n_mels=80, eps=1e-5, normalize=False):
         super(LogMelSpectrogram, self).__init__()
         self.transform = torchaudio.transforms.MelSpectrogram(sample_rate=sample_rate, n_mels=n_mels,
-                                                              n_fft=8192, hop_length=4096, f_min=0, f_max=8000) #1024, 256
+                                                              n_fft=1024, hop_length=256, f_min=0, f_max=8000)
         self.eps=eps
         self.normalize = normalize
 

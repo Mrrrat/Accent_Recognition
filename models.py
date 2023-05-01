@@ -296,7 +296,8 @@ class ECAPA_TDNN(nn.Module):
         
 #         return x, y
     
-    
+
+#VIT    
 MAX_LENGTH = 5000
 
 class PositionalEncoding(nn.Module):
@@ -357,3 +358,132 @@ class AccentTransformer(nn.Module):
         emb = self.encoder(src=output)[:, 0]
         output = self.decoder(emb)
         return emb, output
+    
+
+#QUARTZNET    
+class TSC(nn.Module):
+    def __init__(self, kernel_size, in_channels, out_channels, n_groups=1, 
+                 dilation=1):
+        super(TSC, self).__init__()
+        self.tsc = nn.Sequential(
+            nn.Conv1d(in_channels, in_channels, kernel_size, 
+                      dilation=dilation, groups=in_channels,
+                      padding=dilation * (kernel_size  - 1) // 2 ),
+            nn.Conv1d(in_channels, out_channels, 1, groups=n_groups),
+            nn.BatchNorm1d(out_channels)
+        )
+
+    def forward(self, x):
+        x = self.tsc(x)
+        return x  
+
+
+class TSCActivated(nn.Module):
+    def __init__(self, kernel_size, in_channels, out_channels, n_groups=1, 
+                 dilation=1):
+        super(TSCActivated, self).__init__()
+        self.tsc = TSC(kernel_size, in_channels, out_channels, n_groups, 
+                       dilation)
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        x = self.tsc(x)
+        x = self.activation(x)
+        return x  
+
+
+class TSCBlock(nn.Module):
+    def __init__(self, n_blocks, kernel_size, in_channels, out_channels,
+                 n_groups=1, is_intermediate=False):
+        super(TSCBlock, self).__init__()
+        if is_intermediate:
+            in_channels = out_channels
+        self.n_blocks = n_blocks
+        self.tsc_list = nn.ModuleList([TSCActivated(kernel_size, in_channels, out_channels, n_groups)])
+        self.tsc_list.extend([TSCActivated(kernel_size, out_channels, out_channels, n_groups) 
+                                  for i in range(1, self.n_blocks-1)])
+        self.tsc_list.append(TSC(kernel_size, out_channels, out_channels, n_groups))
+        self.pnt_wise_conv = nn.Conv1d(in_channels, out_channels, kernel_size=1, groups=n_groups)
+        self.bn = nn.BatchNorm1d(out_channels)
+        self.relu = nn.ReLU(True)
+
+    def forward(self, x):
+        x_res = self.bn(self.pnt_wise_conv(x))
+        for layer in self.tsc_list:
+            x = layer(x)
+        return self.relu(x + x_res)
+
+
+class ConvBlock(nn.Module):
+    def __init__(self, kernel_size, in_channels, out_channels, dilation=1, stride=1):
+        super(ConvBlock, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv1d(in_channels, out_channels, kernel_size, 
+                      padding=dilation * (kernel_size - 1) // 2, dilation=dilation, 
+                      stride=stride),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(True)
+        )
+
+    def forward(self, x):
+        x = self.conv(x)
+        return x
+
+
+class QuartzNet(nn.Module):
+    def __init__(self, config):
+        super().__init__() 
+        self.config = config
+        self.net = nn.Sequential(
+            TSCActivated(*config['c1']),
+            TSCBlock(*config['b1']),
+            TSCBlock(*config['b2']),
+            TSCBlock(*config['b3']),
+            TSCBlock(*config['b4']),
+            TSCBlock(*config['b5']),
+            TSCActivated(*config['c2']),
+            TSCActivated(*config['c3']),
+        )
+
+    def forward(self, x):
+        x = self.net(x)
+        return x
+
+
+class ClassificationNet(nn.Module):
+    def __init__(self, num_classes=9, hidden_dim=1024, attn_dim=512, n_mels=80):
+        super().__init__() 
+        config = {
+            #  k, in, out, dilation
+            'c1': [33, n_mels, 256, 1],
+            'c2': [87, 512, 512, 2],
+            'c3': [1, 512, 1024, 1],
+            # n_blocks, k, in, out
+            'b1': [5, 33, 256, 256],
+            'b2': [5, 39, 256, 256],
+            'b3': [5, 51, 256, 512],
+            'b4': [5, 63, 512, 512],
+            'b5': [5, 75, 512, 512]
+        }
+        self.encoder = QuartzNet(config)
+        
+        self.projector = nn.Sequential(
+            nn.Linear(hidden_dim, attn_dim),
+            nn.LayerNorm(attn_dim),
+        )
+        self.positional = PositionalEncoding(d_model=attn_dim, dropout=0.1, max_len=MAX_LENGTH)
+        self.cls = torch.nn.Parameter(torch.rand(1, 1, attn_dim))
+        self.attention = torch.nn.MultiheadAttention(attn_dim, 1, batch_first=True)
+        self.out = nn.Linear(attn_dim, num_classes)
+        
+        
+    def forward(self, x):
+        output = x.squeeze(1)
+        output = self.encoder(output)
+        output = output.transpose(1, 2)
+        output = self.projector(output)
+        output = torch.cat((self.cls.repeat(output.size(0), 1, 1), output), dim=1)
+        output, attn_weights = self.attention(output, output, output)
+        emb = output[:, 0]
+        output = self.out(emb)
+        return emb, output #, attn_weights[:, 0]

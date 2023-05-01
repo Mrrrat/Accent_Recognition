@@ -68,14 +68,13 @@ def collate_mel(batch):
     return samples, labels
 
 
-def get_data_loaders(data_dir, meta_path, transform=None, batch_size=64, num_workers=8, mode='mel'):
+def get_data_loaders(data_dir, meta_path, transform=None, batch_size=64, num_workers=8, mode='mel', n_mels=80):
     meta = pd.read_csv(meta_path)
     train_idx, val_idx, _, _ = train_test_split(np.arange(meta.shape[0], dtype=int), meta['target'], test_size=0.2,
                                                 stratify=meta['target'])
     val_idx, test_idx, _, _ = train_test_split(val_idx, meta['target'][val_idx], test_size=0.5,
                                                 stratify=meta['target'][val_idx])
     
-    n_mels = 128
     train_dataset = AccentDataset(data_dir, meta_path, train_idx, transform=transform, mode=mode, n_mels=n_mels)
     val_dataset = AccentDataset(data_dir, meta_path, val_idx, transform=transform, mode=mode, n_mels=n_mels)
     test_dataset = AccentDataset(data_dir, meta_path, test_idx, transform=transform, mode=mode, n_mels=n_mels)
